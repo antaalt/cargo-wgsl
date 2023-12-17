@@ -1,12 +1,10 @@
 use naga::{
-    front::wgsl,
+    front::wgsl::{self, ParseError},
     valid::{Capabilities, ValidationFlags},
 };
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-
-use crate::wgsl_error::WgslError;
+use crate::{shader_error::{ShaderError, ShaderErrorList, ShaderErrorSeverity}, common::{Validator, ShaderTree}};
 
 pub struct Naga {
     validator: naga::valid::Validator,
@@ -18,23 +16,43 @@ impl Naga {
             validator: naga::valid::Validator::new(ValidationFlags::all(), Capabilities::all()),
         }
     }
-
-    pub fn validate_wgsl(&mut self, path: &Path) -> Result<(), WgslError> {
-        let shader = std::fs::read_to_string(&path).map_err(WgslError::from)?;
+    fn from_parse_err(err: ParseError, src: &str) -> ShaderError {
+        let error = err.emit_to_string(src);
+        let loc = err.location(src);
+        if let Some(loc) = loc {
+            ShaderError::ParserErr {
+                severity: ShaderErrorSeverity::Error,
+                error,
+                line: loc.line_number as usize,
+                pos: loc.line_position as usize,
+            }
+        } else {
+            ShaderError::ParserErr {
+                severity: ShaderErrorSeverity::Error,
+                error,
+                line: 0,
+                pos: 0,
+            }
+        }
+    }
+}
+impl Validator for Naga {
+    fn validate_shader(&mut self, path: &Path) -> Result<(), ShaderErrorList> {
+        let shader = std::fs::read_to_string(&path).map_err(ShaderErrorList::from)?;
         let module =
-            wgsl::parse_str(&shader).map_err(|err| WgslError::from_parse_err(err, &shader))?;
+            wgsl::parse_str(&shader).map_err(|err| Self::from_parse_err(err, &shader))?;
 
         if let Err(error) = self.validator.validate(&module) {
-            Err(WgslError::ValidationErr { emitted: error.emit_to_string(&shader), src: shader, error })
+            Err(ShaderErrorList::from(ShaderError::ValidationErr { emitted: error.emit_to_string(&shader), src: shader, error }))
         } else {
             Ok(())
         }
     }
 
-    pub fn get_wgsl_tree(&mut self, path: &Path) -> Result<WgslTree, WgslError> {
-        let shader = std::fs::read_to_string(&path).map_err(WgslError::from)?;
+    fn get_shader_tree(&mut self, path: &Path) -> Result<ShaderTree, ShaderErrorList> {
+        let shader = std::fs::read_to_string(&path).map_err(ShaderErrorList::from)?;
         let module =
-            wgsl::parse_str(&shader).map_err(|err| WgslError::from_parse_err(err, &shader))?;
+            wgsl::parse_str(&shader).map_err(|err| Self::from_parse_err(err, &shader))?;
 
         let mut types = Vec::new();
         let mut global_variables = Vec::new();
@@ -58,17 +76,10 @@ impl Naga {
             }
         }
 
-        Ok(WgslTree {
+        Ok(ShaderTree {
             types,
             global_variables,
             functions,
         })
     }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct WgslTree {
-    types: Vec<String>,
-    global_variables: Vec<String>,
-    functions: Vec<String>,
 }

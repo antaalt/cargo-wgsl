@@ -1,20 +1,30 @@
 mod output_message;
 use output_message::OutputMessage;
 
+use crate::common::{ShadingLanguage, Validator};
 use crate::naga::Naga;
+use crate::dxc::Dxc;
 use walkdir::WalkDir;
 
-pub fn run() -> i32 {
+pub fn run(shading_language : ShadingLanguage) -> i32 {
     let root_dir = std::fs::canonicalize("./").unwrap();
 
-    let mut validator = Naga::new();
+    let extension = match shading_language {
+        ShadingLanguage::Hlsl => "hlsl",
+        ShadingLanguage::Wgsl => "wgsl",
+    };
+
+    let mut validator : Box<dyn Validator> = match shading_language {
+        ShadingLanguage::Wgsl => Box::new(Naga::new()),
+        ShadingLanguage::Hlsl => Box::new(Dxc::new().expect("Failed to create DXC"))
+    };
 
     let dir_walk = WalkDir::new(&root_dir);
     let dir_walk = dir_walk.into_iter().filter_entry(|e| {
         let path = e.path();
 
         if !path.is_dir() {
-            path.extension().map(|ext| &*ext == "wgsl").unwrap_or(false)
+            path.extension().map(|ext| &*ext == extension).unwrap_or(false)
         } else {
             true
         }
@@ -27,7 +37,7 @@ pub fn run() -> i32 {
             Ok(entry) => {
                 let path = entry.path();
                 if !path.is_dir() {
-                    let msg = match validator.validate_wgsl(path) {
+                    let msg = match validator.validate_shader(path) {
                         Ok(_) => {
                             let path = path.strip_prefix(&root_dir).unwrap_or(path);
                             OutputMessage::success(path)
